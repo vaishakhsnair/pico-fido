@@ -1,0 +1,5 @@
+build
+release
+esp-idf
+managed_components
+.cache
