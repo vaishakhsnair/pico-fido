@@ -82,12 +82,14 @@ set(SOURCES ${SOURCES}
         ${CMAKE_CURRENT_LIST_DIR}/src/fido/fido.c
         ${CMAKE_CURRENT_LIST_DIR}/src/fido/files.c
         ${CMAKE_CURRENT_LIST_DIR}/src/fido/kek.c
+        ${CMAKE_CURRENT_LIST_DIR}/src/fido/biometric.c
         ${CMAKE_CURRENT_LIST_DIR}/src/fido/cmd_register.c
         ${CMAKE_CURRENT_LIST_DIR}/src/fido/cmd_authenticate.c
         ${CMAKE_CURRENT_LIST_DIR}/src/fido/cmd_version.c
         ${CMAKE_CURRENT_LIST_DIR}/src/fido/cbor.c
         ${CMAKE_CURRENT_LIST_DIR}/src/fido/cbor_reset.c
         ${CMAKE_CURRENT_LIST_DIR}/src/fido/cbor_get_info.c
+        ${CMAKE_CURRENT_LIST_DIR}/src/fido/cbor_bio_enroll.c
         ${CMAKE_CURRENT_LIST_DIR}/src/fido/cbor_make_credential.c
         ${CMAKE_CURRENT_LIST_DIR}/src/fido/known_apps.c
         ${CMAKE_CURRENT_LIST_DIR}/src/fido/cbor_client_pin.c

@@ -604,9 +604,6 @@ int cbor_client_pin(const uint8_t *data, size_t len) {
             if (permissions == 0) {
                 CBOR_ERROR(CTAP1_ERR_INVALID_PARAMETER);
             }
-            if ((permissions & CTAP_PERMISSION_BE)) { // Not supported yet
-                CBOR_ERROR(CTAP2_ERR_UNAUTHORIZED_PERMISSION);
-            }
             if ((permissions & CTAP_PERMISSION_PCMR) && permissions != CTAP_PERMISSION_PCMR) {
                 CBOR_ERROR(CTAP2_ERR_UNAUTHORIZED_PERMISSION);
             }

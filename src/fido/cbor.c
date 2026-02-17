@@ -36,6 +36,7 @@ int cbor_make_credential(const uint8_t *data, size_t len);
 int cbor_client_pin(const uint8_t *data, size_t len);
 int cbor_get_assertion(const uint8_t *data, size_t len, bool next);
 int cbor_get_next_assertion(const uint8_t *data, size_t len);
+int cbor_bio_enroll(const uint8_t *data, size_t len);
 int cbor_selection();
 int cbor_cred_mgmt(const uint8_t *data, size_t len);
 int cbor_config(const uint8_t *data, size_t len);
@@ -76,6 +77,9 @@ int cbor_parse(uint8_t cmd, const uint8_t *data, size_t len) {
             }
             else if (data[0] == CTAP_GET_NEXT_ASSERTION) {
                 return cbor_get_next_assertion(data + 1, len - 1);
+            }
+            else if (data[0] == CTAP_BIO_ENROLL) {
+                return cbor_bio_enroll(data + 1, len - 1);
             }
             else if (data[0] == CTAP_SELECTION) {
                 return cbor_selection();

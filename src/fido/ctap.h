@@ -107,6 +107,7 @@ typedef struct {
 #define CTAP_CLIENT_PIN          0x06
 #define CTAP_RESET               0x07
 #define CTAP_GET_NEXT_ASSERTION  0x08
+#define CTAP_BIO_ENROLL          0x09
 #define CTAP_CREDENTIAL_MGMT     0x0A
 #define CTAP_SELECTION           0x0B
 #define CTAP_LARGE_BLOBS         0x0C

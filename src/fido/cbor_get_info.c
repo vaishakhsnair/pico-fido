@@ -23,6 +23,7 @@
 #include "files.h"
 #include "apdu.h"
 #include "version.h"
+#include "biometric.h"
 
 int cbor_get_info() {
     CborEncoder encoder, mapEncoder, arrayEncoder, mapEncoder2;
@@ -65,7 +66,7 @@ int cbor_get_info() {
     CBOR_CHECK(cbor_encode_byte_string(&mapEncoder, aaguid, sizeof(aaguid)));
 
     CBOR_CHECK(cbor_encode_uint(&mapEncoder, 0x04));
-    CBOR_CHECK(cbor_encoder_create_map(&mapEncoder, &arrayEncoder, 9));
+    CBOR_CHECK(cbor_encoder_create_map(&mapEncoder, &arrayEncoder, 10));
     CBOR_CHECK(cbor_encode_text_stringz(&arrayEncoder, "ep"));
     CBOR_CHECK(cbor_encode_boolean(&arrayEncoder, get_opts() & FIDO2_OPT_EA));
     CBOR_CHECK(cbor_encode_text_stringz(&arrayEncoder, "rk"));
@@ -81,6 +82,12 @@ int cbor_get_info() {
     CBOR_CHECK(cbor_encode_boolean(&arrayEncoder, true));
     CBOR_CHECK(cbor_encode_text_stringz(&arrayEncoder, "authnrCfg"));
     CBOR_CHECK(cbor_encode_boolean(&arrayEncoder, true));
+    CBOR_CHECK(cbor_encode_text_stringz(&arrayEncoder, "bioEnroll"));
+#ifdef ESP_PLATFORM
+    CBOR_CHECK(cbor_encode_boolean(&arrayEncoder, true));
+#else
+    CBOR_CHECK(cbor_encode_boolean(&arrayEncoder, bio_is_supported()));
+#endif
     CBOR_CHECK(cbor_encode_text_stringz(&arrayEncoder, "clientPin"));
     if (file_has_data(ef_pin)) {
         CBOR_CHECK(cbor_encode_boolean(&arrayEncoder, true));

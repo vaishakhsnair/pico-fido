@@ -37,6 +37,12 @@
 #include "version.h"
 #include "crypto_utils.h"
 #include "otp.h"
+#include "biometric.h"
+#include <stdlib.h>
+#ifdef ESP_PLATFORM
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#endif
 
 int fido_process_apdu();
 int fido_unload();
@@ -381,7 +387,7 @@ int scan_files_fido() {
                 mbedtls_ecdsa_free(&ecdsa);
                 return ret != 0 ? ret : PICOKEY_EXEC_ERROR;
             }
-            encrypt_keydev_f1(keydev);
+            ret = encrypt_keydev_f1(keydev);
             mbedtls_platform_zeroize(keydev, sizeof(keydev));
             mbedtls_ecdsa_free(&ecdsa);
             if (ret != PICOKEY_OK) {
@@ -396,10 +402,16 @@ int scan_files_fido() {
     ef_certdev = search_by_fid(EF_EE_DEV, NULL, SPECIFY_EF);
     if (ef_certdev) {
         if (!file_has_data(ef_certdev)) {
-            uint8_t cert[2048], outk[32];
+            uint8_t *cert = (uint8_t *)calloc(1, 2048);
+            if (cert == NULL) {
+                return PICOKEY_EXEC_ERROR;
+            }
+            uint8_t outk[32];
             memset(outk, 0, sizeof(outk));
             int ret = 0;
             if ((ret = load_keydev(outk)) != 0) {
+                mbedtls_platform_zeroize(cert, 2048);
+                free(cert);
                 return ret;
             }
             mbedtls_ecdsa_context key;
@@ -407,19 +419,30 @@ int scan_files_fido() {
             ret = mbedtls_ecp_read_key(MBEDTLS_ECP_DP_SECP256R1, &key, outk, sizeof(outk));
             if (ret != 0) {
                 mbedtls_ecdsa_free(&key);
+                mbedtls_platform_zeroize(cert, 2048);
+                free(cert);
                 return ret;
             }
             ret = mbedtls_ecp_mul(&key.grp, &key.Q, &key.d, &key.grp.G, random_gen, NULL);
             if (ret != 0) {
                 mbedtls_ecdsa_free(&key);
+                mbedtls_platform_zeroize(cert, 2048);
+                free(cert);
                 return ret;
             }
-            ret = x509_create_cert(&key, cert, sizeof(cert));
+            ret = x509_create_cert(&key, cert, 2048);
             mbedtls_ecdsa_free(&key);
             if (ret <= 0) {
+                mbedtls_platform_zeroize(cert, 2048);
+                free(cert);
                 return ret;
             }
-            file_put_data(ef_certdev, cert + sizeof(cert) - ret, (uint16_t)ret);
+            ret = file_put_data(ef_certdev, cert + 2048 - ret, (uint16_t)ret);
+            mbedtls_platform_zeroize(cert, 2048);
+            free(cert);
+            if (ret != PICOKEY_OK) {
+                return ret;
+            }
         }
     }
     else {
@@ -477,8 +500,32 @@ void scan_all() {
 }
 
 extern void init_otp();
-void init_fido() {
+#ifdef ESP_PLATFORM
+static void fido_init_worker_task(void *arg) {
+    TaskHandle_t waiter = (TaskHandle_t)arg;
     scan_all();
+    bio_init();
+#ifdef ENABLE_OTP_APP
+    init_otp();
+#endif
+    if (waiter != NULL) {
+        xTaskNotifyGive(waiter);
+    }
+    vTaskDelete(NULL);
+}
+#endif
+
+void init_fido() {
+#ifdef ESP_PLATFORM
+    TaskHandle_t waiter = xTaskGetCurrentTaskHandle();
+    TaskHandle_t worker = NULL;
+    if (xTaskCreatePinnedToCore(fido_init_worker_task, "fido_init", 16384, (void *)waiter, 5, &worker, ESP32_CORE0) == pdPASS) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        return;
+    }
+#endif
+    scan_all();
+    bio_init();
 #ifdef ENABLE_OTP_APP
     init_otp();
 #endif
@@ -497,8 +544,28 @@ bool wait_button_pressed() {
 
 uint32_t user_present_time_limit = 0;
 
+static bool check_biometric_presence(void) {
+    if (!bio_is_supported() || !bio_has_templates()) {
+        return false;
+    }
+
+    bio_event_t evt = { 0 };
+    if (!bio_begin_verify(12000)) {
+        return false;
+    }
+    if (!bio_wait_event(&evt, 13000)) {
+        bio_cancel();
+        return false;
+    }
+
+    return evt.type == BIO_EVT_VERIFY_MATCH;
+}
+
 bool check_user_presence() {
     if (user_present_time_limit == 0 || user_present_time_limit + TRANSPORT_TIME_LIMIT < board_millis()) {
+        if (check_biometric_presence()) {
+            return true;
+        }
         if (wait_button_pressed() == true) { //timeout
             return false;
         }
