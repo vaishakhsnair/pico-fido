@@ -6,10 +6,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include <string.h>
 
 typedef enum {
     BIO_CMD_VERIFY = 0,
     BIO_CMD_ENROLL,
+    BIO_CMD_REMOVE,
     BIO_CMD_WIPE,
 } bio_cmd_type_t;
 
@@ -24,6 +26,8 @@ static QueueHandle_t bio_evt_q = NULL;
 static TaskHandle_t bio_task_handle = NULL;
 static bool bio_supported = false;
 static uint16_t bio_template_count = 0;
+static bool bio_slot_cache_valid = false;
+static uint8_t bio_slot_used[BIO_TEMPLATE_SLOT_COUNT] = { 0 };
 static volatile bool bio_cancel_requested = false;
 static bio_event_t bio_last_event = { .type = BIO_EVT_NONE, .match_id = 0, .sensor_code = 0 };
 
@@ -34,6 +38,49 @@ static bool bio_update_template_count(void) {
         return true;
     }
     return false;
+}
+
+static void bio_invalidate_slot_cache(void) {
+    bio_slot_cache_valid = false;
+}
+
+static bool bio_refresh_slot_cache(void) {
+    if (!bio_supported) {
+        return false;
+    }
+    if (!bio_update_template_count()) {
+        return false;
+    }
+
+    memset(bio_slot_used, 0, sizeof(bio_slot_used));
+    if (bio_template_count == 0) {
+        bio_slot_cache_valid = true;
+        return true;
+    }
+
+    uint16_t found = 0;
+    for (uint16_t id = 0; id < BIO_TEMPLATE_SLOT_COUNT && found < bio_template_count; id++) {
+        uint8_t ret = r302_load_model(id);
+        if (ret == R302_OK) {
+            bio_slot_used[id] = 1;
+            found++;
+        }
+        else if (ret != R302_NOTFOUND &&
+                 ret != R302_BADLOCATION &&
+                 ret != R302_DBRANGEFAIL &&
+                 ret != R302_PACKETRECIEVEERR) {
+            // R302 firmware variants can return different non-OK codes for empty slots.
+            // Keep scanning and log unusual responses instead of failing enumerate.
+            printf("[bio] load_model(%u) during scan -> 0x%02x\n", (unsigned)id, ret);
+        }
+        vTaskDelay(pdMS_TO_TICKS(8));
+    }
+
+    if (found != bio_template_count) {
+        bio_template_count = found;
+    }
+    bio_slot_cache_valid = true;
+    return true;
 }
 
 static bool bio_wait_for_finger(uint32_t timeout_ms) {
@@ -134,6 +181,10 @@ static bio_event_t bio_run_verify(uint32_t timeout_ms) {
 static bio_event_t bio_run_enroll(uint16_t id, uint32_t timeout_ms) {
     (void)timeout_ms;
     bio_event_t evt = { .type = BIO_EVT_ENROLL_FAIL, .match_id = 0, .sensor_code = 0 };
+    if (id >= BIO_TEMPLATE_SLOT_COUNT) {
+        evt.sensor_code = R302_BADLOCATION;
+        return evt;
+    }
 
     if (!bio_wait_for_finger(10000)) {
         evt.type = BIO_EVT_VERIFY_TIMEOUT;
@@ -166,7 +217,6 @@ static bio_event_t bio_run_enroll(uint16_t id, uint32_t timeout_ms) {
         return evt;
     }
 
-    r302_empty_database();
     ret = r302_store_model(id);
     if (ret != R302_OK) {
         evt.sensor_code = ret;
@@ -174,14 +224,34 @@ static bio_event_t bio_run_enroll(uint16_t id, uint32_t timeout_ms) {
     }
 
     bio_update_template_count();
+    bio_invalidate_slot_cache();
     evt.type = BIO_EVT_ENROLL_OK;
+    return evt;
+}
+
+static bio_event_t bio_run_remove(uint16_t id) {
+    bio_event_t evt = { .type = BIO_EVT_REMOVE_FAIL, .match_id = 0, .sensor_code = 0 };
+    if (id >= BIO_TEMPLATE_SLOT_COUNT) {
+        evt.sensor_code = R302_BADLOCATION;
+        return evt;
+    }
+    uint8_t ret = r302_delete_model(id);
+    if (ret == R302_OK) {
+        bio_update_template_count();
+        bio_invalidate_slot_cache();
+        evt.type = BIO_EVT_REMOVE_OK;
+        return evt;
+    }
+    evt.sensor_code = ret;
     return evt;
 }
 
 static bio_event_t bio_run_wipe(void) {
     bio_event_t evt = { .type = BIO_EVT_WIPE_FAIL, .match_id = 0, .sensor_code = 0 };
     if (r302_empty_database() == R302_OK) {
-        bio_update_template_count();
+        bio_template_count = 0;
+        memset(bio_slot_used, 0, sizeof(bio_slot_used));
+        bio_slot_cache_valid = true;
         evt.type = BIO_EVT_WIPE_OK;
     }
     return evt;
@@ -211,6 +281,9 @@ static void bio_task(void *arg) {
             case BIO_CMD_ENROLL:
                 evt = bio_run_enroll(cmd.id, cmd.timeout_ms);
                 break;
+            case BIO_CMD_REMOVE:
+                evt = bio_run_remove(cmd.id);
+                break;
             case BIO_CMD_WIPE:
                 evt = bio_run_wipe();
                 break;
@@ -238,6 +311,7 @@ void bio_init(void) {
     if (err == ESP_OK && verify == R302_OK) {
         bio_supported = true;
         bio_update_template_count();
+        bio_invalidate_slot_cache();
         printf("[bio] sensor ready, templates=%u\n", (unsigned)bio_template_count);
     } else {
         bio_supported = false;
@@ -275,11 +349,21 @@ bool bio_begin_verify(uint32_t timeout_ms) {
 }
 
 bool bio_begin_enroll(uint16_t id, uint32_t timeout_ms) {
-    if (!bio_supported || bio_cmd_q == NULL) {
+    if (!bio_supported || bio_cmd_q == NULL || id >= BIO_TEMPLATE_SLOT_COUNT) {
         return false;
     }
     xQueueReset(bio_evt_q);
     bio_cmd_t cmd = { .type = BIO_CMD_ENROLL, .timeout_ms = timeout_ms, .id = id };
+    return xQueueSend(bio_cmd_q, &cmd, 0) == pdTRUE;
+}
+
+bool bio_begin_remove(uint16_t id, uint32_t timeout_ms) {
+    (void)timeout_ms;
+    if (!bio_supported || bio_cmd_q == NULL || id >= BIO_TEMPLATE_SLOT_COUNT) {
+        return false;
+    }
+    xQueueReset(bio_evt_q);
+    bio_cmd_t cmd = { .type = BIO_CMD_REMOVE, .timeout_ms = 0, .id = id };
     return xQueueSend(bio_cmd_q, &cmd, 0) == pdTRUE;
 }
 
@@ -309,6 +393,51 @@ bool bio_try_get_event(bio_event_t *out) {
         return false;
     }
     return xQueueReceive(bio_evt_q, out, 0) == pdTRUE;
+}
+
+bool bio_get_template_ids(uint16_t *ids, size_t max_ids, size_t *out_count) {
+    if (out_count == NULL || !bio_supported || (max_ids > 0 && ids == NULL)) {
+        return false;
+    }
+    if (!bio_slot_cache_valid && !bio_refresh_slot_cache()) {
+        return false;
+    }
+
+    size_t n = 0;
+    for (uint16_t id = 0; id < BIO_TEMPLATE_SLOT_COUNT && n < max_ids; id++) {
+        if (bio_slot_used[id] != 0) {
+            ids[n++] = id;
+        }
+    }
+    *out_count = n;
+    return true;
+}
+
+bool bio_get_next_free_template_id(uint16_t *id) {
+    if (id == NULL || !bio_supported) {
+        return false;
+    }
+    if (!bio_slot_cache_valid && !bio_refresh_slot_cache()) {
+        return false;
+    }
+
+    for (uint16_t i = 0; i < BIO_TEMPLATE_SLOT_COUNT; i++) {
+        if (bio_slot_used[i] == 0) {
+            *id = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool bio_template_exists(uint16_t id) {
+    if (!bio_supported || id >= BIO_TEMPLATE_SLOT_COUNT) {
+        return false;
+    }
+    if (!bio_slot_cache_valid && !bio_refresh_slot_cache()) {
+        return false;
+    }
+    return bio_slot_used[id] != 0;
 }
 
 #else
@@ -343,6 +472,12 @@ bool bio_begin_enroll(uint16_t id, uint32_t timeout_ms) {
     return false;
 }
 
+bool bio_begin_remove(uint16_t id, uint32_t timeout_ms) {
+    (void)id;
+    (void)timeout_ms;
+    return false;
+}
+
 bool bio_begin_wipe(uint32_t timeout_ms) {
     (void)timeout_ms;
     return false;
@@ -358,6 +493,23 @@ bool bio_wait_event(bio_event_t *out, uint32_t timeout_ms) {
 
 bool bio_try_get_event(bio_event_t *out) {
     (void)out;
+    return false;
+}
+
+bool bio_get_template_ids(uint16_t *ids, size_t max_ids, size_t *out_count) {
+    (void)ids;
+    (void)max_ids;
+    (void)out_count;
+    return false;
+}
+
+bool bio_get_next_free_template_id(uint16_t *id) {
+    (void)id;
+    return false;
+}
+
+bool bio_template_exists(uint16_t id) {
+    (void)id;
     return false;
 }
 

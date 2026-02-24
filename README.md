@@ -13,6 +13,7 @@ Pico FIDO includes the following features:
 - CredProtect extension
 - User presence enforcement through physical button
 - User verification with PIN
+- Fingerprint biometric enrollment/verification on ESP32-S3 builds (R302 sensor integration)
 - Discoverable credentials (resident keys)
 - Credential management
 - ECDSA and EDDSA authentication
@@ -24,6 +25,7 @@ Pico FIDO includes the following features:
 - Secure lock to protect the device from flash dumps
 - Permissions support (MC, GA, CM, ACFG, LBW)
 - Authenticator configuration
+- CTAP2 authenticatorBioEnrollment support (`bioEnroll`)
 - minPinLength extension
 - Self attestation
 - Enterprise attestation
@@ -94,6 +96,68 @@ After running `make`, the binary file `pico_fido.uf2` will be generated. To load
 2. Copy the `pico_fido.uf2` file to the new USB mass storage device that appears.
 3. Once the file is copied, the Pico mass storage device will automatically disconnect, and the Pico board will reset with the new firmware.
 4. A blinking LED will indicate that the device is ready to work.
+
+## Build for ESP32-S3
+
+ESP32-S3 builds use ESP-IDF.
+
+```sh
+git clone https://github.com/polhenarejos/pico-fido
+git submodule update --init --recursive
+cd pico-fido
+source esp-idf/export.sh
+idf.py build
+idf.py -p /dev/ttyUSB0 flash
+```
+
+### Useful ESP32-S3 build options
+
+- Disable Chromium WebUSB/WebCCID popup (default in this tree):
+
+```sh
+idf.py -DENABLE_WEBCCID_ITF=OFF build
+```
+
+- Re-enable WebCCID interface (if you explicitly need it):
+
+```sh
+idf.py -DENABLE_WEBCCID_ITF=ON build
+```
+
+## Fingerprint Enrollment (ESP32-S3 / R302)
+
+This tree includes CTAP2 biometric support (`authenticatorBioEnrollment`) for an R302 fingerprint sensor connected to ESP32-S3 UART.
+
+- Multi-fingerprint enrollment is supported (templates are appended instead of replacing previous ones).
+- Template friendly names are persisted in flash metadata and survive reboot.
+- Fingerprint verification is integrated into user presence checks (biometric-first, button fallback).
+
+### Native Chromium enrollment UI
+
+Use Chromium/Chrome desktop:
+
+1. Open `chrome://settings/securityKeys`
+2. Set or change a PIN
+3. Open `Fingerprints`
+4. Add / remove fingerprints
+
+### Scripted test flow
+
+Use the included test script to exercise:
+- BioEnroll permission token acquisition
+- fingerprint enrollment
+- `makeCredential`
+- `getAssertion`
+
+```sh
+python3 tools/bio_enroll_verify.py --pin <PIN>
+```
+
+To add another fingerprint without deleting existing templates:
+
+```sh
+python3 tools/bio_enroll_verify.py --pin <PIN> --friendly-name finger-2 --keep-existing
+```
 
 ## Led blink
 Pico FIDO uses the led to indicate the current status. Four states are available:

@@ -2,6 +2,7 @@
 #define BIOMETRIC_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -16,10 +17,15 @@ typedef enum {
     BIO_EVT_VERIFY_ERROR,
     BIO_EVT_ENROLL_OK,
     BIO_EVT_ENROLL_FAIL,
+    BIO_EVT_REMOVE_OK,
+    BIO_EVT_REMOVE_FAIL,
     BIO_EVT_WIPE_OK,
     BIO_EVT_WIPE_FAIL,
     BIO_EVT_CANCELLED,
 } bio_event_type_t;
+
+#define BIO_TEMPLATE_MAX_ID 0x00A3
+#define BIO_TEMPLATE_SLOT_COUNT (BIO_TEMPLATE_MAX_ID + 1)
 
 typedef struct {
     bio_event_type_t type;
@@ -35,11 +41,15 @@ bio_event_t bio_get_last_event(void);
 
 bool bio_begin_verify(uint32_t timeout_ms);
 bool bio_begin_enroll(uint16_t id, uint32_t timeout_ms);
+bool bio_begin_remove(uint16_t id, uint32_t timeout_ms);
 bool bio_begin_wipe(uint32_t timeout_ms);
 void bio_cancel(void);
 
 bool bio_wait_event(bio_event_t *out, uint32_t timeout_ms);
 bool bio_try_get_event(bio_event_t *out);
+bool bio_get_template_ids(uint16_t *ids, size_t max_ids, size_t *out_count);
+bool bio_get_next_free_template_id(uint16_t *id);
+bool bio_template_exists(uint16_t id);
 
 #ifdef __cplusplus
 }
