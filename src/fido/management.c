@@ -168,12 +168,8 @@ int cmd_write_config() {
     file_put_data(ef, apdu.data + 1, (uint16_t)(apdu.nc - 1));
     low_flash_available();
 #ifndef ENABLE_EMULATION
-    if (cap_supported(CAP_OTP)) {
-        phy_data.enabled_usb_itf |= PHY_USB_ITF_KB;
-    }
-    else {
-        phy_data.enabled_usb_itf &= ~PHY_USB_ITF_KB;
-    }
+    // Diagnostic Windows enumeration mode: persist HID-only interfaces.
+    phy_data.enabled_usb_itf = PHY_USB_ITF_HID;
     phy_save();
 #endif
     return SW_OK();
