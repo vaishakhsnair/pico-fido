@@ -79,6 +79,15 @@ else()
     set(USB_ITF_WCID 0)
 endif()
 
+option(ENABLE_WINDOWS_DIAGNOSTIC_HID_ONLY "Force HID-only USB enumeration for Windows diagnostic compatibility" OFF)
+if(ENABLE_WINDOWS_DIAGNOSTIC_HID_ONLY)
+    add_definitions(-DENABLE_WINDOWS_DIAGNOSTIC_HID_ONLY=1)
+    message(STATUS "Windows diagnostic HID-only mode:\t enabled")
+else()
+    add_definitions(-DENABLE_WINDOWS_DIAGNOSTIC_HID_ONLY=0)
+    message(STATUS "Windows diagnostic HID-only mode:\t disabled")
+endif()
+
 set(USB_ITF_HID 1)
 include(pico-keys-sdk/pico_keys_sdk_import.cmake)
 

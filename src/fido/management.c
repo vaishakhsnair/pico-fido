@@ -168,9 +168,11 @@ int cmd_write_config() {
     file_put_data(ef, apdu.data + 1, (uint16_t)(apdu.nc - 1));
     low_flash_available();
 #ifndef ENABLE_EMULATION
-    // Diagnostic Windows enumeration mode: persist HID-only interfaces.
+#if ENABLE_WINDOWS_DIAGNOSTIC_HID_ONLY
+    // Optional diagnostic mode for Windows enumeration issues: persist HID-only interfaces.
     phy_data.enabled_usb_itf = PHY_USB_ITF_HID;
     phy_save();
+#endif
 #endif
     return SW_OK();
 }
