@@ -548,6 +548,9 @@ static bool check_biometric_presence(void) {
     if (!bio_is_supported() || !bio_has_templates()) {
         return false;
     }
+    if (bio_uv_blocked()) {
+        return false;
+    }
 
     bio_event_t evt = { 0 };
     if (!bio_begin_verify(12000)) {
@@ -555,10 +558,17 @@ static bool check_biometric_presence(void) {
     }
     if (!bio_wait_event(&evt, 13000)) {
         bio_cancel();
+        bio_note_uv_failure();
         return false;
     }
-
-    return evt.type == BIO_EVT_VERIFY_MATCH;
+    if (evt.type == BIO_EVT_VERIFY_MATCH) {
+        bio_note_uv_success();
+        return true;
+    }
+    if (evt.type == BIO_EVT_VERIFY_NO_MATCH || evt.type == BIO_EVT_VERIFY_ERROR) {
+        bio_note_uv_failure();
+    }
+    return false;
 }
 
 bool check_user_presence() {

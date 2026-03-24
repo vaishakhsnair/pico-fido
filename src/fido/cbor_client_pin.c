@@ -38,6 +38,7 @@
 #include "crypto_utils.h"
 #include "apdu.h"
 #include "kek.h"
+#include "biometric.h"
 
 uint32_t usage_timer = 0, initial_usage_time_limit = 0;
 uint32_t max_usage_time_period  = 600 * 1000;
@@ -280,6 +281,89 @@ int check_keydev_encrypted(const uint8_t pin_token[32]) {
 
 uint8_t new_pin_mismatches = 0;
 
+static int client_pin_get_uv_token(uint8_t pinUvAuthProtocol, uint64_t permissions,
+                                   const CborByteString *kax, const CborByteString *kay,
+                                   const CborCharString *rpId, CborEncoder *encoder) {
+    if (!bio_is_supported() || !bio_has_templates()) {
+        return CTAP2_ERR_UNSUPPORTED_OPTION;
+    }
+    if (bio_uv_blocked()) {
+        return CTAP2_ERR_UV_BLOCKED;
+    }
+    if (pinUvAuthProtocol != 1 && pinUvAuthProtocol != 2) {
+        return CTAP1_ERR_INVALID_PARAMETER;
+    }
+    if (kax->present == false || kay->present == false) {
+        return CTAP2_ERR_MISSING_PARAMETER;
+    }
+    if (permissions == 0) {
+        return CTAP1_ERR_INVALID_PARAMETER;
+    }
+    if ((permissions & CTAP_PERMISSION_PCMR) && permissions != CTAP_PERMISSION_PCMR) {
+        return CTAP2_ERR_UNAUTHORIZED_PERMISSION;
+    }
+    if (mbedtls_mpi_read_binary(&hkey.ctx.mbed_ecdh.Qp.X, kax->data, kax->len) != 0) {
+        return CTAP1_ERR_INVALID_PARAMETER;
+    }
+    if (mbedtls_mpi_read_binary(&hkey.ctx.mbed_ecdh.Qp.Y, kay->data, kay->len) != 0) {
+        return CTAP1_ERR_INVALID_PARAMETER;
+    }
+
+    uint8_t sharedSecret[64];
+    int ret = ecdh(pinUvAuthProtocol, &hkey.ctx.mbed_ecdh.Qp, sharedSecret);
+    if (ret != 0) {
+        mbedtls_platform_zeroize(sharedSecret, sizeof(sharedSecret));
+        return CTAP1_ERR_INVALID_PARAMETER;
+    }
+
+    if (!bio_begin_verify(20000)) {
+        mbedtls_platform_zeroize(sharedSecret, sizeof(sharedSecret));
+        return CTAP2_ERR_UV_INVALID;
+    }
+
+    bio_event_t evt = { 0 };
+    if (!bio_wait_event(&evt, 21000)) {
+        mbedtls_platform_zeroize(sharedSecret, sizeof(sharedSecret));
+        return CTAP2_ERR_USER_ACTION_TIMEOUT;
+    }
+
+    if (evt.type != BIO_EVT_VERIFY_MATCH) {
+        uint8_t retries = bio_note_uv_failure();
+        mbedtls_platform_zeroize(sharedSecret, sizeof(sharedSecret));
+        if (evt.type == BIO_EVT_VERIFY_TIMEOUT || evt.type == BIO_EVT_CANCELLED) {
+            return CTAP2_ERR_USER_ACTION_TIMEOUT;
+        }
+        if (retries == 0) {
+            return CTAP2_ERR_UV_BLOCKED;
+        }
+        return CTAP2_ERR_UV_INVALID;
+    }
+
+    bio_note_uv_success();
+    resetPinUvAuthToken();
+    beginUsingPinUvAuthToken(true);
+    paut.permissions = (uint8_t)permissions;
+    if (rpId->present == true) {
+        mbedtls_sha256((uint8_t *)rpId->data, rpId->len, paut.rp_id_hash, 0);
+        paut.has_rp_id = true;
+    }
+    else {
+        paut.has_rp_id = false;
+    }
+
+    uint8_t pinUvAuthToken_enc[32 + IV_SIZE], *pdata = paut.data;
+    uint8_t poff = (pinUvAuthProtocol - 1) * IV_SIZE;
+    encrypt(pinUvAuthProtocol, sharedSecret, pdata, 32, pinUvAuthToken_enc);
+    mbedtls_platform_zeroize(sharedSecret, sizeof(sharedSecret));
+
+    CborEncoder mapEncoder;
+    cbor_encoder_create_map(encoder, &mapEncoder, 1);
+    cbor_encode_uint(&mapEncoder, 0x02);
+    cbor_encode_byte_string(&mapEncoder, pinUvAuthToken_enc, 32 + poff);
+    cbor_encoder_close_container(encoder, &mapEncoder);
+    return 0;
+}
+
 int cbor_client_pin(const uint8_t *data, size_t len) {
     size_t resp_size = 0;
     uint64_t subcommand = 0x0, pinUvAuthProtocol = 0, permissions = 0;
@@ -361,6 +445,14 @@ int cbor_client_pin(const uint8_t *data, size_t len) {
         else {
             CBOR_ERROR(CTAP1_ERR_INVALID_PARAMETER);
         }
+    }
+    else if (subcommand == 0x7) { //getUVRetries
+        if (!bio_is_supported() || !bio_has_templates()) {
+            CBOR_ERROR(CTAP2_ERR_UNSUPPORTED_OPTION);
+        }
+        CBOR_CHECK(cbor_encoder_create_map(&encoder, &mapEncoder, 1));
+        CBOR_CHECK(cbor_encode_uint(&mapEncoder, 0x05));
+        CBOR_CHECK(cbor_encode_uint(&mapEncoder, (uint64_t)bio_get_uv_retries()));
     }
     else if (subcommand == 0x3) { //setPIN
         if (kax.present == false || kay.present == false || pinUvAuthProtocol == 0 ||
@@ -588,6 +680,17 @@ int cbor_client_pin(const uint8_t *data, size_t len) {
         resetPinUvAuthToken();
         resetPersistentPinUvAuthToken();
         goto err; // No return
+    }
+    else if (subcommand == 0x6) { //getPinUvAuthTokenUsingUvWithPermissions
+        if (pinUvAuthProtocol == 0 || alg == 0) {
+            CBOR_ERROR(CTAP2_ERR_MISSING_PARAMETER);
+        }
+        int uv_ret = client_pin_get_uv_token((uint8_t)pinUvAuthProtocol, permissions, &kax, &kay, &rpId, &encoder);
+        if (uv_ret != 0) {
+            CBOR_ERROR(uv_ret);
+        }
+        resp_size = cbor_encoder_get_buffer_size(&encoder, ctap_resp->init.data + 1);
+        goto err;
     }
     else if (subcommand == 0x9 || subcommand == 0x5) { //getPinUvAuthTokenUsingPinWithPermissions
         if (kax.present == false || kay.present == false || pinUvAuthProtocol == 0 || alg == 0 ||

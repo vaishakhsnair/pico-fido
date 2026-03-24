@@ -26,6 +26,7 @@ static QueueHandle_t bio_evt_q = NULL;
 static TaskHandle_t bio_task_handle = NULL;
 static bool bio_supported = false;
 static uint16_t bio_template_count = 0;
+static uint8_t bio_uv_retries = 5;
 static bool bio_slot_cache_valid = false;
 static uint8_t bio_slot_used[BIO_TEMPLATE_SLOT_COUNT] = { 0 };
 static volatile bool bio_cancel_requested = false;
@@ -339,6 +340,29 @@ bio_event_t bio_get_last_event(void) {
     return bio_last_event;
 }
 
+uint8_t bio_get_uv_retries(void) {
+    return bio_uv_retries;
+}
+
+bool bio_uv_blocked(void) {
+    return bio_uv_retries == 0;
+}
+
+void bio_reset_uv_retries(void) {
+    bio_uv_retries = 5;
+}
+
+uint8_t bio_note_uv_failure(void) {
+    if (bio_uv_retries > 0) {
+        bio_uv_retries--;
+    }
+    return bio_uv_retries;
+}
+
+void bio_note_uv_success(void) {
+    bio_reset_uv_retries();
+}
+
 bool bio_begin_verify(uint32_t timeout_ms) {
     if (!bio_supported || bio_cmd_q == NULL) {
         return false;
@@ -460,6 +484,22 @@ bio_event_t bio_get_last_event(void) {
     bio_event_t evt = { .type = BIO_EVT_NONE, .match_id = 0, .sensor_code = 0 };
     return evt;
 }
+
+uint8_t bio_get_uv_retries(void) {
+    return 0;
+}
+
+bool bio_uv_blocked(void) {
+    return true;
+}
+
+void bio_reset_uv_retries(void) { }
+
+uint8_t bio_note_uv_failure(void) {
+    return 0;
+}
+
+void bio_note_uv_success(void) { }
 
 bool bio_begin_verify(uint32_t timeout_ms) {
     (void)timeout_ms;

@@ -38,6 +38,11 @@ bool bio_is_supported(void);
 bool bio_has_templates(void);
 uint16_t bio_get_template_count(void);
 bio_event_t bio_get_last_event(void);
+uint8_t bio_get_uv_retries(void);
+bool bio_uv_blocked(void);
+void bio_reset_uv_retries(void);
+uint8_t bio_note_uv_failure(void);
+void bio_note_uv_success(void);
 
 bool bio_begin_verify(uint32_t timeout_ms);
 bool bio_begin_enroll(uint16_t id, uint32_t timeout_ms);
