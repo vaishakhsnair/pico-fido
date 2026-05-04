@@ -79,6 +79,7 @@ int oath_select(app_t *a, uint8_t force) {
     if (cap_supported(CAP_OATH)) {
         a->process_apdu = oath_process_apdu;
         a->unload = oath_unload;
+        validated = file_has_data(search_dynamic_file(EF_OATH_CODE)) ? false : true;
         res_APDU_size = 0;
         res_APDU[res_APDU_size++] = TAG_T_VERSION;
         res_APDU[res_APDU_size++] = 3;
@@ -122,6 +123,7 @@ INITIALIZER ( oath_ctor ) {
 }
 
 int oath_unload() {
+    validated = file_has_data(search_dynamic_file(EF_OATH_CODE)) ? false : true;
     return PICOKEY_OK;
 }
 
@@ -333,13 +335,16 @@ int cmd_validate() {
     uint8_t hmac[64];
     int ret = mbedtls_md_hmac(md_info, key.data + 1, key.len - 1, challenge, sizeof(challenge), hmac);
     if (ret != 0) {
+        validated = false;
         return SW_EXEC_ERROR();
     }
     if (memcmp(hmac, resp.data, resp.len) != 0) {
+        validated = false;
         return SW_DATA_INVALID();
     }
     ret = mbedtls_md_hmac(md_info, key.data + 1, key.len - 1, chal.data, chal.len, hmac);
     if (ret != 0) {
+        validated = false;
         return SW_EXEC_ERROR();
     }
     validated = true;
